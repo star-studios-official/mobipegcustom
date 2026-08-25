@@ -10,6 +10,8 @@ version <next>:
 - latticepal filter
 - DVD-Audio LPCM decoder and demuxing support
 - AVFoundation input device selection by unique ID and USB serial number
+- RWAV/BRWAV, FWAV/BFWAV and CWAV/BCWAV demuxers and muxers
+- MobiClip MOC2/MOC3 demuxer
 
 
 version 9.0:
