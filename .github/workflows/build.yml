@@ -21,7 +21,7 @@ jobs:
             build-essential pkgconf nasm autoconf automake libtool
 
       # Build x264 fork WITHOUT any assembly (no AVX/AVX2/AVX512)
-      - name: Build x264 (SSE4.2 only, no asm)
+      - name: Build x264 (no asm)
         run: |
           DEPS="${GITHUB_WORKSPACE}/deps"
           mkdir -p "$DEPS"
@@ -36,7 +36,12 @@ jobs:
             --disable-asm
           make -j$(nproc) && make install
 
-      # Configure FFmpeg with SSE4.2 ceiling — no AVX/AVX2/AVX512/FMA
+      # Configure FFmpeg — NO AVX whatsoever.
+      # Key flags:
+      #   --disable-avx / --disable-avx2 / --disable-avx512  = disable feature
+      #   --disable-runtime-cpu-detection = strip ALL AVX code paths from binary
+      #   -march=x86-64 = baseline (SSE2 only), compiler never emits AVX intrinsics
+      #   --disable-asm = also drops hand-written AVX asm in libavcodec
       - name: Configure FFmpeg
         run: |
           DEPS="${GITHUB_WORKSPACE}/deps"
@@ -56,9 +61,28 @@ jobs:
             --disable-xlib \
             --enable-libx264 \
             --pkg-config-flags="--static" \
-            --extra-cflags="-I$DEPS/include -msse4.2 -mno-avx -mno-avx2 -mno-fma -mno-xop -mno-f16c -mno-fma4 -mno-avx512f -mno-avx512bw -mno-avx512vl -mno-avx512dq" \
+            --extra-cflags="-I$DEPS/include -march=x86-64 -msse4.2 -mno-avx -mno-avx2 -mno-fma -mno-xop -mno-f16c -mno-fma4 -mno-avx512f -mno-avx512bw -mno-avx512vl -mno-avx512dq" \
             --extra-ldflags="-L$DEPS/lib" \
-          || { cat ffbuild/config.log; exit 1; }
+            --disable-avx \
+            --disable-avx2 \
+            --disable-avx512 \
+            --disable-avx512ic \
+            --disable-runtime-cpu-detection \
+            --disable-asm \
+          || { echo "=== CONFIGURE FAILED ==="; cat ffbuild/config.log | tail -50; exit 1; }
+
+          # Force-kill any AVX that leaked into config.h
+          sed -i 's/^#define HAVE_AVX 1/#define HAVE_AVX 0/' config.h
+          sed -i 's/^#define HAVE_AVX2 1/#define HAVE_AVX2 0/' config.h
+          sed -i 's/^#define HAVE_AVX512 1/#define HAVE_AVX512 0/' config.h
+          sed -i 's/^#define HAVE_AVX512ICL 1/#define HAVE_AVX512ICL 0/' config.h
+          sed -i 's/^#define HAVE_FMA3 1/#define HAVE_FMA3 0/' config.h
+          sed -i 's/^#define HAVE_FMA4 1/#define HAVE_FMA4 0/' config.h
+          sed -i 's/^#define HAVE_XOP 1/#define HAVE_XOP 0/' config.h
+          sed -i 's/^#define HAVE_F16C 1/#define HAVE_F16C 0/' config.h
+
+          echo "=== Verified config.h AVX state ==="
+          grep -E "HAVE_AVX|HAVE_FMA|HAVE_XOP|HAVE_F16C" config.h
 
       - name: Build
         run: make -j$(nproc)
@@ -69,10 +93,12 @@ jobs:
       - name: Verify no AVX instructions
         run: |
           echo "=== Checking for AVX/AVX2/AVX512 in binaries ==="
-          AVX_COUNT=$(objdump -d dist/bin/ffmpeg 2>/dev/null | grep -cE '\b(vpxor|vpaddd|vmovdqu|vpunpck|ymm[0-9])' || true)
+          AVX_COUNT=$(objdump -d dist/bin/ffmpeg 2>/dev/null | grep -ciE '\b(vpxor|vpaddd|vmovdqu|vpunpck|ymm[0-9]|vmovaps|vaddps|vmulps|vfmadd)' || true)
           echo "AVX/AVX2 instruction count: $AVX_COUNT"
           if [ "$AVX_COUNT" -gt 0 ]; then
             echo "ERROR: Binary contains AVX instructions!"
+            echo "=== First 10 offending instructions ==="
+            objdump -d dist/bin/ffmpeg 2>/dev/null | grep -iE '\b(vpxor|vpaddd|vmovdqu|vpunpck|ymm[0-9])' | head -10
             exit 1
           fi
           echo "OK: No AVX instructions found — safe for Celeron N4500"
