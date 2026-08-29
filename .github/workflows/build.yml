@@ -66,9 +66,9 @@ jobs:
             --disable-avx \
             --disable-avx2 \
             --disable-avx512 \
-            --disable-avx512ic \
             --disable-runtime-cpu-detection \
             --disable-asm \
+            --disable-avx512icl \
           || { echo "=== CONFIGURE FAILED ==="; cat ffbuild/config.log | tail -50; exit 1; }
 
           # Force-kill any AVX that leaked into config.h
